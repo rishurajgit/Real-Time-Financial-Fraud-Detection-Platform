@@ -10,12 +10,14 @@ import {
   YAxis,
 } from 'recharts';
 import { CheckCircle2 } from 'lucide-react';
-import type { MlflowRun, ModelConfig, PrCurvePoint } from '../types/fraud';
+import type { MlModelInfo, MlflowRun, ModelConfig, PrCurvePoint } from '../types/fraud';
 
 interface ModelMlflowViewProps {
   runs: MlflowRun[];
   prCurve: PrCurvePoint[];
   modelConfig: ModelConfig;
+  mlModelInfo?: MlModelInfo | null;
+  mlServiceReachable?: boolean;
   onUpdateModelConfig: (patch: Partial<ModelConfig>) => Promise<void>;
 }
 
@@ -23,6 +25,8 @@ export function ModelMlflowView({
   runs,
   prCurve,
   modelConfig,
+  mlModelInfo,
+  mlServiceReachable,
   onUpdateModelConfig,
 }: ModelMlflowViewProps) {
   const [xgbWeight, setXgbWeight] = useState(modelConfig.xgbWeight);
@@ -68,9 +72,79 @@ export function ModelMlflowView({
     setTimeout(() => setSavedToast(null), 3500);
   };
 
+  const realValMetrics =
+    mlModelInfo?.ready && mlModelInfo.validation_metrics
+      ? ((mlModelInfo.validation_metrics.metrics as Record<string, unknown> | undefined) ??
+        mlModelInfo.validation_metrics)
+      : null;
+
   return (
     <div className="space-y-6">
-      {/* Top Evaluation Metrics */}
+      {/* Phase 2 Live FastAPI Loaded Artifact Status */}
+      <section className="bg-white border border-slate-200 rounded-lg p-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-200">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900">
+              Live FastAPI XGBoost Model Status (/api/v1/ml/model/info)
+            </h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              {mlModelInfo?.ready ? (
+                <>
+                  <span className="text-emerald-700 font-semibold">Loaded</span>
+                  <span className="mx-1.5" aria-hidden="true">·</span>
+                  <span className="font-mono">{mlModelInfo.model_version}</span>
+                  <span className="mx-1.5" aria-hidden="true">·</span>
+                  <span>{mlModelInfo.feature_count} features</span>
+                </>
+              ) : mlServiceReachable ? (
+                <span className="text-amber-700 font-semibold">
+                  Model Unavailable — Missing trained artifact ({mlModelInfo?.missing_artifacts?.join(', ') || 'model_bundle.joblib'})
+                </span>
+              ) : (
+                <span className="text-red-700 font-semibold">
+                  FastAPI ML Service Offline — Live model metrics unavailable
+                </span>
+              )}
+            </p>
+          </div>
+          <span className="text-xs text-slate-500">
+            Below: Reference baseline curves (MLflow API wired in Phase 5)
+          </span>
+        </div>
+
+        {realValMetrics && (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-4 text-xs">
+            <div>
+              <p className="text-slate-500">Measured PR-AUC</p>
+              <p className="mt-0.5 text-lg font-mono tabular-nums font-semibold text-blue-700">
+                {typeof realValMetrics.pr_auc === 'number' ? realValMetrics.pr_auc.toFixed(4) : 'N/A'}
+              </p>
+            </div>
+            <div>
+              <p className="text-slate-500">Measured ROC-AUC</p>
+              <p className="mt-0.5 text-lg font-mono tabular-nums font-semibold text-slate-900">
+                {typeof realValMetrics.roc_auc === 'number' ? realValMetrics.roc_auc.toFixed(4) : 'N/A'}
+              </p>
+            </div>
+            <div>
+              <p className="text-slate-500">Validation F1</p>
+              <p className="mt-0.5 text-lg font-mono tabular-nums font-semibold text-slate-900">
+                {typeof realValMetrics.f1_score === 'number' ? realValMetrics.f1_score.toFixed(4) : 'N/A'}
+              </p>
+            </div>
+            <div>
+              <p className="text-slate-500">Review / Block Threshold</p>
+              <p className="mt-0.5 text-lg font-mono tabular-nums font-semibold text-slate-900">
+                {mlModelInfo?.thresholds
+                  ? `${mlModelInfo.thresholds.review.toFixed(2)} / ${mlModelInfo.thresholds.block.toFixed(2)}`
+                  : 'N/A'}
+              </p>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* Top Evaluation Metrics (Simulated Baseline Reference) */}
       <section className="bg-white border border-slate-200 rounded-lg">
         <div className="grid grid-cols-2 lg:grid-cols-4 divide-y lg:divide-y-0 sm:divide-x divide-slate-200">
           <div className="p-5">

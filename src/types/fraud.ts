@@ -259,3 +259,85 @@ export interface ScoreTransactionRequest {
   deviceChangeFlag?: 0 | 1;
   ingestIntoStream?: boolean;
 }
+
+// Phase 2: Real FastAPI XGBoost Inference Types (via Express /api/v1/ml/* proxy)
+export type MlDecision = 'Approved' | 'Review' | 'Blocked';
+
+export interface MlPredictRequest {
+  transaction_id: string;
+  transaction_dt: number;
+  transaction_amt: number;
+  product_cd?: string;
+  card1?: number;
+  card4?: string;
+  card6?: string;
+  addr1?: number;
+  addr2?: number;
+  dist1?: number;
+  p_emaildomain?: string;
+  device_type?: string;
+  device_info?: string;
+  extra_features?: Record<string, number | string | null>;
+}
+
+export interface MlRiskIndicator {
+  feature: string;
+  value: number | string;
+  importance: number | null;
+  signal: string;
+}
+
+export interface MlPredictionResponse {
+  transaction_id: string;
+  xgboost_probability: number;
+  gnn_probability: number | null;
+  final_score: number;
+  decision: MlDecision;
+  inference_latency_ms: number;
+  model_version: string;
+  scoring_mode: 'xgboost_only' | 'hybrid_xgb_gnn';
+  gnn_available: boolean;
+  thresholds: {
+    review: number;
+    block: number;
+  };
+  risk_indicators: MlRiskIndicator[];
+  scored_at_utc: string;
+  source: 'xgboost_inference';
+}
+
+export interface MlHealthStatus {
+  status: 'ok' | 'degraded';
+  service: string;
+  model_ready: boolean;
+  model_version: string | null;
+  missing_artifacts: string[];
+  uptime_seconds: number;
+  timestamp_utc: string;
+}
+
+export interface MlModelInfo {
+  ready: boolean;
+  model_type: string;
+  model_version: string | null;
+  trained_at_utc: string | null;
+  artifact_dir: string;
+  missing_artifacts: string[];
+  feature_count: number | null;
+  feature_names: string[];
+  thresholds: {
+    review: number;
+    block: number;
+  } | null;
+  validation_metrics: Record<string, unknown> | null;
+  pr_curve: Array<{ recall: number; precision: number; threshold?: number }> | null;
+  gnn_status: 'not_implemented_phase4' | 'unavailable' | 'ready';
+}
+
+export interface MlApiError {
+  status: number;
+  error: string;
+  detail: string;
+  missing_artifacts?: string[];
+}
+

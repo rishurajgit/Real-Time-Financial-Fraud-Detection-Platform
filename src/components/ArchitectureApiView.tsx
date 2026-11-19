@@ -6,10 +6,13 @@ import type {
   ScoreTransactionRequest,
   ScoredTransaction,
 } from '../types/fraud';
+import type { MlInferenceActions } from './LiveStreamView';
+import { RealMlInferencePanel } from './RealMlInferencePanel';
 
 interface ArchitectureApiViewProps {
   edaSummaries: Record<DatasetProfile, DatasetEdaSummary>;
   activeDataset: DatasetProfile;
+  mlInference?: MlInferenceActions;
   onScoreTransaction: (req: ScoreTransactionRequest) => Promise<ScoredTransaction>;
 }
 
@@ -100,6 +103,7 @@ const ARCHITECTURE_STAGES = [
 export function ArchitectureApiView({
   edaSummaries,
   activeDataset,
+  mlInference,
   onScoreTransaction,
 }: ArchitectureApiViewProps) {
   const [edaProfile, setEdaProfile] = useState<DatasetProfile>(activeDataset);
@@ -243,15 +247,33 @@ export function ArchitectureApiView({
         </div>
       </section>
 
-      {/* Live POST /api/v1/score Interactive Sandbox */}
+      {/* Real FastAPI XGBoost Prediction Sandbox */}
+      {mlInference && (
+        <RealMlInferencePanel
+          health={mlInference.health}
+          modelInfo={mlInference.modelInfo}
+          serviceReachable={mlInference.serviceReachable}
+          statusLoading={mlInference.statusLoading}
+          predicting={mlInference.predicting}
+          reloading={mlInference.reloading}
+          lastPrediction={mlInference.lastPrediction}
+          realPredictions={mlInference.realPredictions}
+          error={mlInference.error}
+          onPredict={mlInference.predictTransaction}
+          onRefreshStatus={mlInference.refreshStatus}
+          onReloadModel={mlInference.reloadModel}
+        />
+      )}
+
+      {/* Legacy Simulated Express Scoring Endpoint Sandbox */}
       <section className="bg-white border border-slate-200 rounded-lg p-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200">
           <div>
             <h2 className="text-sm font-semibold text-slate-900">
-              Live Scoring Endpoint Sandbox — POST /api/v1/score
+              Legacy Simulated Scoring Sandbox — POST /api/v1/score
             </h2>
             <p className="text-xs text-slate-500 mt-0.5">
-              Dispatch a real HTTP scoring request to the backend service and inspect Feast lookup, XGBoost + PyG scores, and decision output.
+              In-memory Express simulator preserved for historical replay testing (does not invoke XGBoost).
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-1.5">

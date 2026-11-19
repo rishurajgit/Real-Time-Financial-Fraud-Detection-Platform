@@ -13,6 +13,7 @@ import {
   X,
 } from 'lucide-react';
 import { useFraudPlatform } from './hooks/useFraudPlatform';
+import { useMlInference } from './hooks/useMlInference';
 import { LiveStreamView } from './components/LiveStreamView';
 import { CaseQueueView } from './components/CaseQueueView';
 import { FraudRingGraphView } from './components/FraudRingGraphView';
@@ -56,6 +57,8 @@ export default function App() {
     triggerRetraining,
     scoreCustomTransaction,
   } = useFraudPlatform();
+
+  const mlInference = useMlInference();
 
   const [activeTab, setActiveTab] = useState<TabId>('live');
   const [focusedRingId, setFocusedRingId] = useState<string | null>(null);
@@ -216,7 +219,12 @@ export default function App() {
               <h1 className="font-semibold text-slate-900 truncate">{activeNav.sectionLabel}</h1>
               {state && (
                 <span className="hidden md:inline text-xs text-slate-400 whitespace-nowrap ml-2">
-                  · {streamConnected && state.stream.running ? 'Kafka Replay Active' : 'Stream Paused'}
+                  ·{' '}
+                  {mlInference.serviceReachable && mlInference.health?.model_ready
+                    ? `XGBoost Ready (${mlInference.health.model_version})`
+                    : mlInference.serviceReachable
+                      ? 'FastAPI Online · Model Unavailable'
+                      : 'FastAPI Offline · Simulated Replay'}
                 </span>
               )}
             </div>
@@ -287,6 +295,7 @@ export default function App() {
                   modelConfig={state.modelConfig}
                   transactions={state.transactions}
                   throughputHistory={state.throughputHistory}
+                  mlInference={mlInference}
                   onUpdateStream={updateStreamControl}
                   onUpdateCase={updateCase}
                   onOpenRing={handleOpenRing}
@@ -315,6 +324,8 @@ export default function App() {
                   runs={state.mlflowRuns}
                   prCurve={state.prCurve}
                   modelConfig={state.modelConfig}
+                  mlModelInfo={mlInference.modelInfo}
+                  mlServiceReachable={mlInference.serviceReachable}
                   onUpdateModelConfig={updateModelConfig}
                 />
               )}
@@ -333,6 +344,7 @@ export default function App() {
                 <ArchitectureApiView
                   edaSummaries={state.edaSummaries}
                   activeDataset={state.stream.dataset}
+                  mlInference={mlInference}
                   onScoreTransaction={scoreCustomTransaction}
                 />
               )}

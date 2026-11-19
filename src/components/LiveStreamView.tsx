@@ -26,6 +26,15 @@ import type {
   StreamControlState,
   ThroughputPoint,
 } from '../types/fraud';
+import type { MlInferenceState } from '../hooks/useMlInference';
+import type { MlPredictRequest, MlPredictionResponse } from '../types/fraud';
+import { RealMlInferencePanel } from './RealMlInferencePanel';
+
+export interface MlInferenceActions extends MlInferenceState {
+  refreshStatus: () => Promise<void>;
+  predictTransaction: (payload: MlPredictRequest) => Promise<MlPredictionResponse | null>;
+  reloadModel: () => Promise<void>;
+}
 
 interface LiveStreamViewProps {
   metrics: PlatformMetrics;
@@ -33,6 +42,7 @@ interface LiveStreamViewProps {
   modelConfig: ModelConfig;
   transactions: ScoredTransaction[];
   throughputHistory: ThroughputPoint[];
+  mlInference?: MlInferenceActions;
   onUpdateStream: (patch: Partial<StreamControlState>) => Promise<void>;
   onUpdateCase: (
     caseId: string,
@@ -69,6 +79,7 @@ export function LiveStreamView({
   modelConfig,
   transactions,
   throughputHistory,
+  mlInference,
   onUpdateStream,
   onUpdateCase,
   onOpenRing,
@@ -178,16 +189,33 @@ export function LiveStreamView({
         </div>
       </section>
 
-      {/* Kafka Replay Throughput & Stream Controls */}
+      {/* Phase 2: Real FastAPI XGBoost Inference Panel */}
+      {mlInference && (
+        <RealMlInferencePanel
+          health={mlInference.health}
+          modelInfo={mlInference.modelInfo}
+          serviceReachable={mlInference.serviceReachable}
+          statusLoading={mlInference.statusLoading}
+          predicting={mlInference.predicting}
+          reloading={mlInference.reloading}
+          lastPrediction={mlInference.lastPrediction}
+          realPredictions={mlInference.realPredictions}
+          error={mlInference.error}
+          onPredict={mlInference.predictTransaction}
+          onRefreshStatus={mlInference.refreshStatus}
+          onReloadModel={mlInference.reloadModel}
+        />
+      )}
+
+      {/* Historical Simulated Replay Stream & Controls */}
       <section className="bg-white border border-slate-200 rounded-lg p-5">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 pb-4 border-b border-slate-200">
           <div>
             <h2 className="text-sm font-semibold text-slate-900">
-              Kafka Consumer Throughput & Latency
+              Historical Simulated Stream Replay (Pre-Kafka Phase 3)
             </h2>
             <p className="text-xs text-slate-500 mt-0.5">
-              Active model {modelConfig.activeRunId} · Blend {Math.round(modelConfig.xgbWeight * 100)}% XGBoost /{' '}
-              {Math.round(modelConfig.gnnWeight * 100)}% PyG GNN · Block threshold{' '}
+              Simulated in-memory stream · Separate from Real XGBoost Inference above · Block threshold{' '}
               <span className="font-mono tabular-nums">{modelConfig.blockThreshold.toFixed(2)}</span>
             </p>
           </div>

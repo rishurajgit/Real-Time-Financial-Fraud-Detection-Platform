@@ -1,9 +1,11 @@
+import 'dotenv/config';
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { fraudPlatform } from './src/server/fraudPlatform.ts';
+import { createMlProxyRouter } from './src/server/mlProxy.ts';
 import type { CaseStatus, FeedbackLabel, ScoreTransactionRequest } from './src/types/fraud.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -14,6 +16,9 @@ async function startServer() {
   const port = Number(process.env.PORT || 3000);
 
   app.use(express.json());
+
+  // Phase 2: Real FastAPI ML Inference Service proxy (no simulated fallbacks)
+  app.use('/api/v1/ml', createMlProxyRouter());
 
   // Health probe
   app.get('/api/health', (_req, res) => {
