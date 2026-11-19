@@ -7,9 +7,10 @@ definitions with zero target or future leakage.
 
 from __future__ import annotations
 
+import random
 from collections import deque
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Sequence
 
 if TYPE_CHECKING:
     import numpy as np
@@ -284,18 +285,118 @@ def engineer_transaction_features(df: "pd.DataFrame") -> "pd.DataFrame":
     return out
 
 
+def _normalize_category_value(value: Any) -> str:
+    if value is None or value != value:  # handles float('nan') / None
+        return "MISSING"
+    text = str(value)
+    return "MISSING" if text.lower() == "nan" else text
+
+
+def compute_oof_smoothed_risk_rates(
+    categories: Sequence[Any],
+    targets: Sequence[int | float],
+    n_splits: int = 5,
+    smoothing_strength: float = 50.0,
+    random_state: int = 42,
+) -> tuple[list[float], dict[str, float], float]:
+    """Compute leakage-safe out-of-fold Bayesian-smoothed target encodings.
+
+    Fold assignments depend strictly on (len(targets), n_splits, random_state)
+    and NEVER on target labels. Consequently, for every training row i:
+      - Fold membership of row i is invariant to targets[i].
+      - Both the out-of-fold global prior and out-of-fold category statistics
+        exclude row i's fold entirely.
+      - Flipping targets[i] cannot change encoded_oof[i].
+
+    Also returns the full-training-set mapping (full_risk_map, full_global_rate)
+    for validation and production inference via transform().
+    """
+    n = len(categories)
+    if n != len(targets):
+        raise ValueError("categories and targets must have identical length.")
+    if n == 0:
+        return [], {}, 0.0
+
+    norm_cats = [_normalize_category_value(c) for c in categories]
+    y_vals = [float(t) for t in targets]
+
+    # Full-training mapping for validation & inference (strictly fit on training split)
+    full_total_sum = sum(y_vals)
+    full_global_rate = full_total_sum / n
+    full_counts: dict[str, int] = {}
+    full_sums: dict[str, float] = {}
+    for cat, y_val in zip(norm_cats, y_vals):
+        full_counts[cat] = full_counts.get(cat, 0) + 1
+        full_sums[cat] = full_sums.get(cat, 0.0) + y_val
+
+    full_risk_map = {
+        cat: (full_sums[cat] + smoothing_strength * full_global_rate)
+        / (full_counts[cat] + smoothing_strength)
+        for cat in full_counts
+    }
+
+    if n < 2:
+        return [0.0], full_risk_map, full_global_rate
+
+    effective_splits = max(2, min(int(n_splits), n))
+
+    # Deterministic, label-independent K-fold partition
+    indices = list(range(n))
+    rng = random.Random(random_state)
+    rng.shuffle(indices)
+    fold_assignments = [0] * n
+    for rank, idx in enumerate(indices):
+        fold_assignments[idx] = rank % effective_splits
+
+    # Pre-aggregate per-fold totals and per-(fold, category) sums/counts in O(n)
+    fold_sizes = [0] * effective_splits
+    fold_y_sums = [0.0] * effective_splits
+    fold_cat_counts: list[dict[str, int]] = [{} for _ in range(effective_splits)]
+    fold_cat_sums: list[dict[str, float]] = [{} for _ in range(effective_splits)]
+
+    for idx in range(n):
+        f = fold_assignments[idx]
+        cat = norm_cats[idx]
+        y_val = y_vals[idx]
+        fold_sizes[f] += 1
+        fold_y_sums[f] += y_val
+        fold_cat_counts[f][cat] = fold_cat_counts[f].get(cat, 0) + 1
+        fold_cat_sums[f][cat] = fold_cat_sums[f].get(cat, 0.0) + y_val
+
+    oof_encoded = [0.0] * n
+    for idx in range(n):
+        f = fold_assignments[idx]
+        cat = norm_cats[idx]
+        oof_n = n - fold_sizes[f]
+        oof_total_y = full_total_sum - fold_y_sums[f]
+        oof_global_prior = oof_total_y / oof_n if oof_n > 0 else 0.0
+
+        oof_cat_count = full_counts[cat] - fold_cat_counts[f].get(cat, 0)
+        oof_cat_sum = full_sums[cat] - fold_cat_sums[f].get(cat, 0.0)
+        oof_encoded[idx] = (oof_cat_sum + smoothing_strength * oof_global_prior) / (
+            oof_cat_count + smoothing_strength
+        )
+
+    return oof_encoded, full_risk_map, full_global_rate
+
+
 @dataclass
 class FraudFeaturePreprocessor:
     """Reproducible training/serving preprocessor fit strictly on training data.
 
-    Prevents target leakage by fitting:
-      - High-missingness column drop masks on train only
-      - Bayesian-smoothed category fraud risk rates on (X_train, y_train) only
-      - Numeric median imputers and unknown-safe categorical ordinal encodings on train only
+    Prevents target leakage by:
+      - Fitting high-missingness column drop masks on train only
+      - Computing out-of-fold (OOF) Bayesian-smoothed category risk rates during
+        fit_transform() so no training row's label leaks into its own feature
+      - Applying full training-fitted risk-rate mappings during transform() for
+        validation and online inference
+      - Fitting numeric median imputers and categorical vocabularies on train only
     """
 
     max_missing_fraction: float = 0.95
     smoothing_strength: float = 50.0
+    oof_n_splits: int = 5
+    random_state: int = 42
     numeric_columns_: list[str] = field(default_factory=list)
     categorical_columns_: list[str] = field(default_factory=list)
     risk_rate_maps_: dict[str, dict[str, float]] = field(default_factory=dict)
@@ -307,7 +408,7 @@ class FraudFeaturePreprocessor:
     def fit(self, df: "pd.DataFrame", y: "pd.Series") -> "FraudFeaturePreprocessor":
         import numpy as np
 
-        self.global_fraud_rate_ = float(y.mean())
+        self.global_fraud_rate_ = float(y.mean()) if len(y) > 0 else 0.0
 
         # Select engineered + core raw numeric features present and below missingness cap
         candidate_num = list(ENGINEERED_BEHAVIORAL_FEATURES) + [
@@ -349,17 +450,21 @@ class FraudFeaturePreprocessor:
             frequent = counts[counts >= 5].index.tolist()
             self.category_vocab_[col] = {val: i + 1 for i, val in enumerate(frequent)}
 
-        # Bayesian-smoothed historical category risk rates fit strictly on (train_df, y_train)
+        # Full-training Bayesian-smoothed category risk rates (used ONLY for validation/inference transform)
         self.risk_rate_maps_ = {}
+        y_list = y.tolist()
         for col in RISK_ENCODED_CATEGORIES:
             if col not in df.columns:
                 continue
-            vals = df[col].fillna("MISSING").astype(str)
-            stats = df.assign(_cat=vals, _y=y.values).groupby("_cat")["_y"].agg(["count", "sum"])
-            smoothed = (stats["sum"] + self.smoothing_strength * self.global_fraud_rate_) / (
-                stats["count"] + self.smoothing_strength
+            _, full_map, global_rate = compute_oof_smoothed_risk_rates(
+                categories=df[col].tolist(),
+                targets=y_list,
+                n_splits=self.oof_n_splits,
+                smoothing_strength=self.smoothing_strength,
+                random_state=self.random_state,
             )
-            self.risk_rate_maps_[col] = {str(k): float(v) for k, v in smoothed.items()}
+            self.global_fraud_rate_ = global_rate
+            self.risk_rate_maps_[col] = full_map
 
         self.output_feature_names_ = (
             list(self.numeric_columns_)
@@ -369,6 +474,7 @@ class FraudFeaturePreprocessor:
         return self
 
     def transform(self, df: "pd.DataFrame") -> "pd.DataFrame":
+        """Transform validation or online inference rows using training-fitted mappings only."""
         import numpy as np
         import pandas as pd
 
@@ -404,4 +510,21 @@ class FraudFeaturePreprocessor:
         return pd.DataFrame(cols_out, index=df.index)[self.output_feature_names_]
 
     def fit_transform(self, df: "pd.DataFrame", y: "pd.Series") -> "pd.DataFrame":
-        return self.fit(df, y).transform(df)
+        """Fit full mappings for inference and return leakage-safe OOF-encoded training features."""
+        import numpy as np
+
+        self.fit(df, y)
+        out = self.transform(df)
+
+        y_list = y.tolist()
+        for col in self.risk_rate_maps_.keys():
+            oof_vals, _, _ = compute_oof_smoothed_risk_rates(
+                categories=df[col].tolist(),
+                targets=y_list,
+                n_splits=self.oof_n_splits,
+                smoothing_strength=self.smoothing_strength,
+                random_state=self.random_state,
+            )
+            out[f"{col}_risk_rate"] = np.asarray(oof_vals, dtype=np.float32)
+
+        return out[self.output_feature_names_]

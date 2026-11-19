@@ -22,6 +22,7 @@ from src.data.loader import (
 from src.features.engineering import (
     build_entity_keys_row,
     compute_causal_behavioral_records,
+    compute_oof_smoothed_risk_rates,
 )
 from src.models.evaluate import (
     compute_confusion_counts,
@@ -161,6 +162,55 @@ class TestCausalFeatureEngineering(unittest.TestCase):
         self.assertEqual(loc, "UNKNOWN|UNKNOWN")
 
 
+class TestOutOfFoldTargetEncodingAntiLeakage(unittest.TestCase):
+    def test_flipping_any_training_row_label_never_changes_its_own_oof_encoding(self) -> None:
+        categories = [
+            "W", "C", "W", "H", "C", "W", "R", "C", "W", "H",
+            "W", "C", "R", "C", "W", "H", "C", "W", "W", None,
+        ]
+        targets = [0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1]
+
+        baseline_oof, baseline_map, baseline_prior = compute_oof_smoothed_risk_rates(
+            categories=categories,
+            targets=targets,
+            n_splits=5,
+            smoothing_strength=10.0,
+            random_state=42,
+        )
+
+        # Reproducibility check
+        repeat_oof, repeat_map, repeat_prior = compute_oof_smoothed_risk_rates(
+            categories=categories,
+            targets=targets,
+            n_splits=5,
+            smoothing_strength=10.0,
+            random_state=42,
+        )
+        self.assertEqual(baseline_oof, repeat_oof)
+        self.assertEqual(baseline_map, repeat_map)
+        self.assertEqual(baseline_prior, repeat_prior)
+
+        # Proof of zero self-label leakage for EVERY row i in the training set
+        for idx in range(len(targets)):
+            flipped_targets = list(targets)
+            flipped_targets[idx] = 1 - flipped_targets[idx]
+            flipped_oof, flipped_map, _ = compute_oof_smoothed_risk_rates(
+                categories=categories,
+                targets=flipped_targets,
+                n_splits=5,
+                smoothing_strength=10.0,
+                random_state=42,
+            )
+            self.assertEqual(
+                baseline_oof[idx],
+                flipped_oof[idx],
+                msg=f"Target leakage detected at row {idx}: flipping y[{idx}] altered oof[{idx}].",
+            )
+            # Conversely, the full-training inference map MUST reflect the full training labels
+            cat_key = "MISSING" if categories[idx] is None else str(categories[idx])
+            self.assertNotEqual(baseline_map[cat_key], flipped_map[cat_key])
+
+
 class TestEvaluationMetrics(unittest.TestCase):
     def test_confusion_counts_exact(self) -> None:
         y_true = [1, 1, 0, 0, 0, 1]
@@ -180,6 +230,57 @@ class TestEvaluationMetrics(unittest.TestCase):
 
 @unittest.skipUnless(HAS_PANDAS_XGB, "Requires pandas, numpy, scikit-learn, xgboost, joblib")
 class TestPhase1EndToEndWithMlDeps(unittest.TestCase):
+    def test_preprocessor_oof_training_vs_validation_transform_no_leakage(self) -> None:
+        import pandas as pd
+
+        from src.features.engineering import FraudFeaturePreprocessor, engineer_transaction_features
+
+        raw_train = pd.DataFrame(
+            {
+                "TransactionID": list(range(1, 31)),
+                "TransactionDT": [i * 600 for i in range(1, 31)],
+                "TransactionAmt": [50.0 + (i % 7) * 40.0 for i in range(1, 31)],
+                "ProductCD": ["W", "C", "H", "C", "W"] * 6,
+                "card4": ["visa", "mastercard", "visa"] * 10,
+                "card6": ["debit", "credit"] * 15,
+                "P_emaildomain": ["gmail.com", "yahoo.com", "anonymous.com"] * 10,
+                "DeviceType": ["desktop", "mobile", None] * 10,
+            }
+        )
+        train_feat = engineer_transaction_features(raw_train)
+        y_base = pd.Series([1 if i % 5 == 0 else 0 for i in range(30)], dtype="int32")
+
+        p_base = FraudFeaturePreprocessor(oof_n_splits=5, smoothing_strength=10.0, random_state=42)
+        X_train_base = p_base.fit_transform(train_feat, y_base)
+
+        # Flip label of row 3 and re-run fit_transform: row 3's encoded risk_rate columns must be unchanged
+        y_flipped = y_base.copy()
+        y_flipped.iloc[3] = 1 - y_flipped.iloc[3]
+        p_flip = FraudFeaturePreprocessor(oof_n_splits=5, smoothing_strength=10.0, random_state=42)
+        X_train_flip = p_flip.fit_transform(train_feat, y_flipped)
+
+        self.assertEqual(list(X_train_base.columns), p_base.output_feature_names_)
+        self.assertEqual(list(X_train_base.columns), list(X_train_flip.columns))
+        for col in [c for c in X_train_base.columns if c.endswith("_risk_rate")]:
+            self.assertEqual(float(X_train_base.iloc[3][col]), float(X_train_flip.iloc[3][col]))
+
+        # Validation/inference transform uses full training-fitted mappings & preserves column order
+        val_raw = raw_train.iloc[:4].copy()
+        val_raw.loc[val_raw.index[0], "ProductCD"] = "UNSEEN_PRODUCT"
+        val_feat = engineer_transaction_features(val_raw)
+        X_val = p_base.transform(val_feat)
+        self.assertEqual(list(X_val.columns), p_base.output_feature_names_)
+        self.assertAlmostEqual(
+            float(X_val.iloc[0]["ProductCD_risk_rate"]),
+            float(p_base.global_fraud_rate_),
+            places=5,
+        )
+        self.assertAlmostEqual(
+            float(X_val.iloc[1]["ProductCD_risk_rate"]),
+            float(p_base.risk_rate_maps_["ProductCD"]["C"]),
+            places=5,
+        )
+
     def test_chronological_split_and_xgboost_training_roundtrip(self) -> None:
         import joblib
         import numpy as np

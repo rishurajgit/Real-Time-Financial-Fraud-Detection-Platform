@@ -67,8 +67,8 @@ def train_xgboost_pipeline(
             "Both training and validation chronological splits must contain positive fraud examples."
         )
 
-    # 4. Fit leakage-safe preprocessor strictly on training split
-    preprocessor = FraudFeaturePreprocessor()
+    # 4. Fit leakage-safe preprocessor strictly on training split (OOF target encoding on X_train)
+    preprocessor = FraudFeaturePreprocessor(random_state=cfg.random_seed)
     X_train = preprocessor.fit_transform(train_df, y_train)
     X_val = preprocessor.transform(val_df)
 
