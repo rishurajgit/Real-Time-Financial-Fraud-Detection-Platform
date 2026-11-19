@@ -6,3 +6,17 @@ coverage/
 *.log
 .env*
 !.env.example
+!ml_service/.env.example
+
+# Python & ML artifacts
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+ml_service/data/raw/*.csv
+ml_service/data/processed/
+ml_service/artifacts/
+ml_service/mlruns/
+ml_service/mlflow.db
+

@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sentinelrisk-ml"
+version = "0.1.0"
+description = "SentinelRisk Python ML pipeline: IEEE-CIS EDA, Feast features, XGBoost, PyTorch Geometric GNN, FastAPI, Kafka, MLflow, and Evidently AI."
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-v"
