@@ -1,0 +1,6 @@
+{
+  "name": "SentinelRisk — Real-Time Financial Fraud Detection Platform",
+  "description": "Real-time financial transaction scoring, fraud ring graph detection, Feast feature serving, MLflow experiment tracking, Evidently AI drift monitoring, and analyst case triage console.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
